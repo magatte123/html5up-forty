@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+      - trivy
+
+permissions:
+  contents: read
+  security-events: write
 
 env:
   IMAGE_NAME: ci-html
@@ -12,12 +17,8 @@ env:
 
 jobs:
 
-  # ===============================
-  # JOB 1 - CI : BUILD + PUSH + SCAN
-  # ===============================
   ci:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
@@ -37,37 +38,48 @@ jobs:
         run: |
           docker build -t $DOCKER_REGISTRY/$IMAGE_NAME:$IMAGE_TAG .
 
-      - name: Verify image
+      - name: Verify image exists locally
         run: |
           docker image ls | grep $IMAGE_NAME
 
-      - name: Push Docker image
+      - name: Push Docker image to Docker Hub
         run: |
           docker push $DOCKER_REGISTRY/$IMAGE_NAME:$IMAGE_TAG
+
+  scan-trivy:
+    name: Security Scan with Trivy
+    runs-on: ubuntu-latest
+    needs: ci
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@0.20.0
         with:
-          image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/ci-html-demo:latest
-          format: table
-          severity: CRITICAL,HIGH
-          exit-code: 1
-          vuln-type: os,library
+          image-ref: "${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"
+          vuln-type: "os,library"
           ignore-unfixed: true
 
-  # ===============================
-  # JOB 2 - CD : DEPLOY
-  # ===============================
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-results.sarif"
+
   deploy:
-    needs: ci
-    runs-on: aws-runner
-
+    runs-on: ubuntu-latest
+    needs: scan-trivy
     steps:
-      - name: Pull latest image
+      - name: Start deploy
         run: |
-          echo "Hello deploy"
+          echo "Deploiement de $DOCKER_REGISTRY/$IMAGE_NAME:$IMAGE_TAG"
 
-      - name: Pull latest image
+      - name: Pull latest Docker image
         run: |
           docker pull $DOCKER_REGISTRY/$IMAGE_NAME:$IMAGE_TAG
 
